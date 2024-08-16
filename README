@@ -1,0 +1,9 @@
+A ~fast enough~ URL shortener generating short links like this: domain.tld/!84v2b
+Could use some optimization, tests, and benchmarks.
+Bang! uses Valkey database (Redis fork) to store and persist redirects. A sample Docker Compose file is included in the repository to spin up one.
+
+--- How to use ---
+To create a new link: POST request at /new?url=[your link]
+To delete a link: DELETE request at /[short url]?key=[64 character long key provided when creating link]
+To run Bang!, start the database using "docker compose up -d", then run the executable or run "go run .".
+IMPORTANT: Make sure to run this behind HTTPS/TLS encryption, since the key for a short link gets sent around in clear text format.
