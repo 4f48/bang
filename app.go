@@ -24,6 +24,7 @@ import (
 	"os"
 	"os/signal"
 	"regexp"
+	"strconv"
 	"syscall"
 
 	"github.com/gofiber/fiber/v3"
@@ -45,11 +46,11 @@ func main() {
 
 	app.Get("/", func(c fiber.Ctx) error {
 		return c.JSON(fiber.Map{
-			"bang!": "1.0.0-alpha.1",
+			"bang!": "1.1.0",
 		})
 	})
 	app.Post("/new", func(c fiber.Ctx) error {
-		redirect := c.Queries()["url"]
+		redirect := c.Query("url")
 		if redirect == "" {
 			return fiber.NewError(fiber.StatusBadRequest, "missing url query parameter")
 		}
@@ -70,7 +71,7 @@ func main() {
 			return fiber.NewError(fiber.StatusInternalServerError, "failed to generate admin key")
 		}
 
-		err = client.Do(ctx, client.B().Rpush().Key(slug).Element(redirect).Element(key).Build()).Error()
+		err = client.Do(ctx, client.B().Rpush().Key(slug).Element(redirect).Element(key).Element(fmt.Sprint(0)).Build()).Error()
 		if err != nil {
 			return fiber.NewError(fiber.StatusInternalServerError, "failed to register redirect")
 		}
@@ -91,13 +92,56 @@ func main() {
 			return fiber.NewError(fiber.StatusBadRequest, "failed to retrieve redirect")
 		}
 
+		go func() {
+			val, err := client.Do(ctx, client.B().Lindex().Key(slug).Index(2).Build()).ToString()
+			if err != nil {
+				log.Println("Failed to get clicks counter for" + slug)
+				return
+			}
+			valint, _ := strconv.Atoi(val)
+
+			err = client.Do(ctx, client.B().Lset().Key(slug).Index(2).Element(fmt.Sprint(valint+1)).Build()).Error()
+			if err != nil {
+				log.Println("Failed to increment counter for" + slug)
+				return
+			}
+		}()
+
 		return c.Redirect().To(val)
+	})
+	app.Get("/clicks/:slug", func(c fiber.Ctx) error {
+		slug := c.Params("slug")
+		key := c.Query("key")
+		if slug == "" || slug == "!" {
+			return fiber.NewError(fiber.StatusBadRequest, "missing slug")
+		}
+		if key == "" {
+			return fiber.NewError(fiber.StatusBadRequest, "missing key from query params")
+		}
+
+		field, err := client.Do(ctx, client.B().Lindex().Key(slug).Index(1).Build()).ToString()
+		if err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, "failed to check admin key")
+		}
+		if field != key {
+			return fiber.NewError(fiber.StatusUnauthorized)
+		}
+
+		val, err := client.Do(ctx, client.B().Lindex().Key(slug).Index(2).Build()).ToString()
+		if err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, "failed to get statistics")
+		}
+
+		return c.SendString(val)
 	})
 	app.Delete("/:slug", func(c fiber.Ctx) error {
 		slug := c.Params("slug")
-		key := c.Queries()["key"]
+		key := c.Query("key")
 		if slug == "" || slug == "!" {
 			return fiber.NewError(fiber.StatusBadRequest, "missing slug")
+		}
+		if key == "" {
+			return fiber.NewError(fiber.StatusBadRequest, "missing key from query params")
 		}
 
 		val, err := client.Do(ctx, client.B().Lindex().Key(slug).Index(0).Build()).ToString()
@@ -119,7 +163,7 @@ func main() {
 			return fiber.NewError(fiber.StatusInternalServerError, "failed to delete redirect")
 		}
 
-		return c.SendString(fmt.Sprintf("deleted redirect for %v", val))
+		return c.SendStatus(fiber.StatusOK)
 	})
 
 	go func() {
@@ -136,7 +180,7 @@ func main() {
 	_ = app.Shutdown()
 
 	log.Println("Cleaning up...")
-	defer client.Close()
+	client.Close()
 
 	log.Println("Successful shutdown.")
 }
